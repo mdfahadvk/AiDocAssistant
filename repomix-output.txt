@@ -1,0 +1,786 @@
+This file is a merged representation of a subset of the codebase, containing specifically included files and files not matching ignore patterns, combined into a single document by Repomix.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of a subset of the repository's contents that is considered the most important context.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Only files matching these patterns are included: **/*.py, **/*.ipynb, **/*.toml, **/requirements*.txt, **/*.md, **/*.yaml, **/*.yml
+- Files matching these patterns are excluded: **/.venv/**, **/venv/**, **/__pycache__/**, **/.git/**, **/.ipynb_checkpoints/**, **/node_modules/**, **/dist/**, **/build/**, **/.env*, **/*.pem, **/*.key
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+.streamlit/
+  config.toml
+src/
+  __init__.py
+  data_loader.py
+  embedding.py
+  search.py
+  vectorstore.py
+app.py
+README.md
+requirements.txt
+ui.py
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path=".streamlit/config.toml">
+[server]
+address = "127.0.0.1"
+headless = true
+</file>
+
+<file path="src/__init__.py">
+
+</file>
+
+<file path="src/data_loader.py">
+import json
+from pathlib import Path
+from typing import Any
+
+from langchain_community.document_loaders import (
+    CSVLoader,
+    Docx2txtLoader,
+    PyPDFLoader,
+    TextLoader,
+)
+from langchain_core.documents import Document
+
+
+LOADERS: dict[str, Any] = {
+    ".pdf": PyPDFLoader,
+    ".txt": TextLoader,
+    ".md": TextLoader,
+    ".csv": CSVLoader,
+    ".docx": Docx2txtLoader,
+}
+SUPPORTED_EXTENSIONS = frozenset((*LOADERS, ".json", ".jsonl"))
+
+
+def load_document_file(file_path: str | Path) -> list[Document]:
+    """Load one supported document file into LangChain documents."""
+    path = Path(file_path).expanduser().resolve()
+    suffix = path.suffix.lower()
+    if suffix not in SUPPORTED_EXTENSIONS:
+        raise ValueError(f"Unsupported file type: {suffix or '(no extension)'}")
+
+    if suffix in LOADERS:
+        kwargs = {"encoding": "utf-8"} if suffix in {".txt", ".md"} else {}
+        return LOADERS[suffix](str(path), **kwargs).load()
+    if suffix == ".json":
+        value = json.loads(path.read_text(encoding="utf-8"))
+        text = json.dumps(value, ensure_ascii=False, indent=2)
+        return [Document(page_content=text, metadata={"source": str(path)})]
+
+    documents = []
+    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        if line.strip():
+            value = json.loads(line)
+            documents.append(
+                Document(
+                    page_content=json.dumps(value, ensure_ascii=False),
+                    metadata={"source": str(path), "line": line_number},
+                )
+            )
+    return documents
+
+
+def load_all_documents(data_dir: str | Path) -> list[Document]:
+    """Load supported documents recursively, reporting all parse failures."""
+    data_path = Path(data_dir).expanduser().resolve()
+    if not data_path.is_dir():
+        raise FileNotFoundError(
+            f"Document directory not found: {data_path}. Create it and add documents."
+        )
+
+    documents: list[Document] = []
+    failures: list[str] = []
+    for path in sorted(
+        file_path
+        for file_path in data_path.rglob("*")
+        if file_path.is_file() and file_path.suffix.lower() in SUPPORTED_EXTENSIONS
+    ):
+        try:
+            documents.extend(load_document_file(path))
+        except Exception as exc:
+            failures.append(f"{path}: {exc}")
+
+    if failures:
+        details = "\n".join(f"- {failure}" for failure in failures)
+        raise RuntimeError(f"Could not load one or more documents:\n{details}")
+    return documents
+</file>
+
+<file path="src/embedding.py">
+from typing import List, Any
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from sentence_transformers import SentenceTransformer
+import numpy as np
+from src.data_loader import load_all_documents
+
+class EmbeddingPipeline:
+    def __init__(self, model_name: str = "all-MiniLM-L6-v2", chunk_size: int = 1000, chunk_overlap: int = 200, model: SentenceTransformer | None = None):
+        self.chunk_size = chunk_size
+        self.chunk_overlap = chunk_overlap
+        self.model = model or SentenceTransformer(model_name)
+        print(f"[INFO] Loaded embedding model: {model_name}")
+
+    def chunk_documents(self, documents: List[Any]) -> List[Any]:
+        splitter = RecursiveCharacterTextSplitter(
+            chunk_size=self.chunk_size,
+            chunk_overlap=self.chunk_overlap,
+            length_function=len,
+            separators=["\n\n", "\n", " ", ""]
+        )
+        chunks = splitter.split_documents(documents)
+        print(f"[INFO] Split {len(documents)} documents into {len(chunks)} chunks.")
+        return chunks
+
+    def embed_chunks(self, chunks: List[Any]) -> np.ndarray:
+        texts = [chunk.page_content for chunk in chunks]
+        print(f"[INFO] Generating embeddings for {len(texts)} chunks...")
+        embeddings = self.model.encode(texts, show_progress_bar=True)
+        print(f"[INFO] Embeddings shape: {embeddings.shape}")
+        return embeddings
+
+# Example usage
+if __name__ == "__main__":
+    
+    docs = load_all_documents("docs")
+    emb_pipe = EmbeddingPipeline()
+    chunks = emb_pipe.chunk_documents(docs)
+    embeddings = emb_pipe.embed_chunks(chunks)
+    print("[INFO] Example embedding:", embeddings[0] if len(embeddings) > 0 else None)
+</file>
+
+<file path="src/search.py">
+import os
+from dotenv import load_dotenv
+from src.vectorstore import ChromaVectorStore
+from langchain_groq import ChatGroq
+
+load_dotenv()
+
+class RAGSearch:
+    def __init__(
+        self,
+        persist_dir: str = "chroma_store",
+        embedding_model: str = "all-MiniLM-L6-v2",
+        llm_model: str = "openai/gpt-oss-120b",
+        vectorstore: ChromaVectorStore | None = None,
+    ):
+        self.vectorstore = vectorstore or ChromaVectorStore(persist_dir, embedding_model)
+        if self.vectorstore.collection.count() == 0:
+            raise RuntimeError("ChromaDB is empty. Add documents in the Documents tab first.")
+        groq_api_key = os.getenv("GROQ_API_KEY")
+        if not groq_api_key:
+            raise RuntimeError("GROQ_API_KEY is missing. Add it to your .env file.")
+        self.llm = ChatGroq(groq_api_key=groq_api_key, model=llm_model)
+        print(f"[INFO] Groq LLM initialized: {llm_model}")
+
+    def search_and_summarize(self, query: str, top_k: int = 5) -> str:
+        results = self.vectorstore.query(query, top_k=top_k)
+        # Chroma returns cosine distance (0 is identical, larger is less similar).
+        # Avoid sending unrelated passages to the LLM, where they can encourage
+        # a plausible but unsupported answer.
+        max_distance = float(os.getenv("RETRIEVAL_MAX_DISTANCE", "0.65"))
+        relevant = [r for r in results if r.get("distance", 2.0) <= max_distance]
+        if not relevant:
+            return "I’m not trained to answer that from the documents currently uploaded. Please upload the related document and index it first."
+
+        texts = [r["metadata"].get("text", "") for r in relevant if r["metadata"]]
+        context = "\n\n".join(texts)
+        if not context:
+            return "I’m not trained to answer that from the documents currently uploaded. Please upload the related document and index it first."
+        prompt = f"""Answer the user's question using only the supplied document excerpts. The excerpts are the complete evidence available. Do not use outside knowledge, guess, or invent project details. If the excerpts do not explicitly contain enough information to answer, reply exactly: 'I’m not trained to answer that from the documents currently uploaded. Please upload the related document and index it first.'
+
+Question: {query}
+
+Document excerpts:
+{context}
+
+Answer:"""
+        response = self.llm.invoke([prompt])
+        return response.content
+
+# Example usage
+if __name__ == "__main__":
+    rag_search = RAGSearch()
+    query = "What is attention mechanism?"
+    summary = rag_search.search_and_summarize(query, top_k=3)
+    print("Summary:", summary)
+</file>
+
+<file path="src/vectorstore.py">
+import hashlib
+import os
+from pathlib import Path
+from typing import Any, Callable
+import uuid
+
+import chromadb
+from sentence_transformers import SentenceTransformer
+
+from src.embedding import EmbeddingPipeline
+
+
+class ChromaVectorStore:
+    """Persistent ChromaDB store with Sentence Transformers embeddings."""
+
+    def __init__(
+        self,
+        persist_dir: str = "chroma_store",
+        embedding_model: str = "all-MiniLM-L6-v2",
+        chunk_size: int = 1000,
+        chunk_overlap: int = 200,
+    ):
+        self.persist_dir = str(Path(persist_dir).expanduser())
+        self.embedding_model = embedding_model
+        self.chunk_size = chunk_size
+        self.chunk_overlap = chunk_overlap
+        self._model: SentenceTransformer | None = None
+        chroma_mode = os.getenv("CHROMA_MODE", "local").lower()
+        if chroma_mode == "cloud":
+            try:
+                self.client = chromadb.CloudClient()
+            except Exception as exc:
+                raise RuntimeError(
+                    "Could not connect to Chroma Cloud. Set CHROMA_API_KEY, "
+                    "CHROMA_TENANT, and CHROMA_DATABASE in .env."
+                ) from exc
+        elif chroma_mode == "local":
+            self.client = chromadb.PersistentClient(path=self.persist_dir)
+        else:
+            raise ValueError("CHROMA_MODE must be 'local' or 'cloud'.")
+        self.collection = self.client.get_or_create_collection(
+            name="documents", metadata={"hnsw:space": "cosine"}
+        )
+
+    @property
+    def model(self) -> SentenceTransformer:
+        if self._model is None:
+            self._model = SentenceTransformer(self.embedding_model)
+        return self._model
+
+    def _chunk_documents(self, documents: list[Any]) -> list[Any]:
+        pipeline = EmbeddingPipeline(
+            model_name=self.embedding_model,
+            chunk_size=self.chunk_size,
+            chunk_overlap=self.chunk_overlap,
+            model=self.model,
+        )
+        return pipeline.chunk_documents(documents)
+
+    @staticmethod
+    def _metadata(chunk: Any, source_key: str, source_label: str) -> dict[str, Any]:
+        metadata: dict[str, Any] = {
+            "source": source_label,
+            "source_key": source_key,
+            "source_label": source_label,
+        }
+        page = chunk.metadata.get("page")
+        if isinstance(page, (int, float, str)):
+            metadata["page"] = page
+        return metadata
+
+    def _insert_chunks(
+        self,
+        chunks: list[Any],
+        source_keys: list[str],
+        source_labels: list[str],
+        batch_size: int = 128,
+    ) -> None:
+        for start in range(0, len(chunks), batch_size):
+            batch = chunks[start : start + batch_size]
+            batch_keys = source_keys[start : start + batch_size]
+            batch_labels = source_labels[start : start + batch_size]
+            embeddings = self.model.encode(
+                [chunk.page_content for chunk in batch],
+                show_progress_bar=False,
+                convert_to_numpy=True,
+            ).tolist()
+            ids = [
+                hashlib.sha256(f"{key}\0{start + offset}".encode("utf-8")).hexdigest()
+                for offset, key in enumerate(batch_keys)
+            ]
+            self.collection.upsert(
+                ids=ids,
+                embeddings=embeddings,
+                documents=[chunk.page_content for chunk in batch],
+                metadatas=[
+                    self._metadata(chunk, key, label)
+                    for chunk, key, label in zip(batch, batch_keys, batch_labels)
+                ],
+            )
+
+    def build_from_documents(self, documents: list[Any]) -> int:
+        """Replace the collection contents with chunks from the given documents."""
+        if not documents:
+            raise ValueError("No documents to index. Add supported files under docs/.")
+        chunks = self._chunk_documents(documents)
+        if not chunks:
+            raise ValueError("No text chunks were created. Check that your documents contain text.")
+
+        self.client.delete_collection("documents")
+        self.collection = self.client.create_collection(
+            name="documents", metadata={"hnsw:space": "cosine"}
+        )
+        source_keys: list[str] = []
+        source_labels: list[str] = []
+        for chunk in chunks:
+            source_path = Path(str(chunk.metadata.get("source", "unknown")))
+            label = source_path.name or "unknown"
+            if source_path.parent.name.casefold() == "uploads":
+                key = f"upload:{label.casefold()}"
+            else:
+                key = f"file:{str(source_path).casefold()}"
+            source_keys.append(key)
+            source_labels.append(label)
+        self._insert_chunks(chunks, source_keys, source_labels)
+        print(f"[INFO] Indexed {len(chunks)} chunks in {self.persist_dir}")
+        return len(chunks)
+
+    def upsert_file(
+        self,
+        documents: list[Any],
+        source_key: str,
+        source_label: str,
+        progress: Callable[[float], None] | None = None,
+    ) -> int:
+        """Index one uploaded file, replacing any prior chunks for its stable key."""
+        if not documents:
+            raise ValueError("The uploaded file contains no readable text.")
+        chunks = self._chunk_documents(documents)
+        if not chunks:
+            raise ValueError("No text chunks were created from this file.")
+
+        # Encode before deleting the existing version, so an embedding failure leaves it intact.
+        all_embeddings: list[list[float]] = []
+        batch_size = 128
+        for start in range(0, len(chunks), batch_size):
+            batch = chunks[start : start + batch_size]
+            encoded = self.model.encode(
+                [chunk.page_content for chunk in batch],
+                show_progress_bar=False,
+                convert_to_numpy=True,
+            ).tolist()
+            all_embeddings.extend(encoded)
+            if progress:
+                progress(0.5 * min(1.0, (start + len(batch)) / len(chunks)))
+
+        # Add the replacement set first so an insertion failure leaves the prior upload intact.
+        previous_ids = self._previous_upload_ids(source_key, source_label)
+        generation = uuid.uuid4().hex
+        new_ids = [
+            hashlib.sha256(f"{source_key}\0{generation}\0{index}".encode("utf-8")).hexdigest()
+            for index in range(len(chunks))
+        ]
+        try:
+            for start in range(0, len(chunks), batch_size):
+                batch = chunks[start : start + batch_size]
+                batch_embeddings = all_embeddings[start : start + batch_size]
+                batch_ids = new_ids[start : start + batch_size]
+                self.collection.add(
+                    ids=batch_ids,
+                    embeddings=batch_embeddings,
+                    documents=[chunk.page_content for chunk in batch],
+                    metadatas=[
+                        self._metadata(chunk, source_key, source_label) for chunk in batch
+                    ],
+                )
+                if progress:
+                    progress(0.5 + 0.5 * min(1.0, (start + len(batch)) / len(chunks)))
+        except Exception:
+            self.collection.delete(ids=new_ids)
+            raise
+        if previous_ids:
+            self.collection.delete(ids=previous_ids)
+        return len(chunks)
+
+    def _previous_upload_ids(self, source_key: str, source_label: str) -> list[str]:
+        records = self.collection.get(include=["metadatas"])
+        matching_ids: list[str] = []
+        for record_id, metadata in zip(records.get("ids", []), records.get("metadatas") or []):
+            metadata = metadata or {}
+            source = str(metadata.get("source", ""))
+            source_path = Path(source.replace("\\", "/"))
+            is_same_upload = (
+                str(metadata.get("source_key", "")) == source_key
+                or str(metadata.get("source_label", "")).casefold() == source_label.casefold()
+                or (
+                    source_path.parent.name.casefold() == "uploads"
+                    and source_path.name.casefold() == source_label.casefold()
+                )
+            )
+            if is_same_upload:
+                matching_ids.append(record_id)
+        return matching_ids
+
+    def index_summary(self) -> tuple[int, list[str]]:
+        """Return chunk count and distinct indexed document labels."""
+        count = self.collection.count()
+        if count == 0:
+            return 0, []
+        records = self.collection.get(include=["metadatas"])
+        sources = sorted(
+            {
+                str(metadata.get("source_label") or metadata.get("source", "unknown"))
+                for metadata in (records.get("metadatas") or [])
+            }
+        )
+        sources = [
+            "Legacy chunks (source metadata unavailable)" if source == "unknown" else source
+            for source in sources
+        ]
+        return count, sources
+
+    def query(self, query_text: str, top_k: int = 5) -> list[dict[str, Any]]:
+        count = self.collection.count()
+        if count == 0:
+            raise RuntimeError("ChromaDB is empty. Add documents and rebuild the index.")
+        query_embedding = self.model.encode([query_text], convert_to_numpy=True)[0].tolist()
+        matches = self.collection.query(
+            query_embeddings=[query_embedding],
+            n_results=min(max(1, top_k), count),
+            include=["documents", "metadatas", "distances"],
+        )
+        return [
+            {
+                "distance": distance,
+                "metadata": {"text": text, **(metadata or {})},
+            }
+            for text, metadata, distance in zip(
+                matches["documents"][0],
+                matches["metadatas"][0],
+                matches["distances"][0],
+            )
+        ]
+</file>
+
+<file path="app.py">
+import argparse
+import os
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+from src.data_loader import load_all_documents
+from src.search import RAGSearch
+from src.vectorstore import ChromaVectorStore
+
+
+def main() -> None:
+    load_dotenv()
+    parser = argparse.ArgumentParser(description="Ask questions about your local documents.")
+    parser.add_argument(
+        "--rebuild", action="store_true", help="Rebuild the local index from the documents."
+    )
+    args = parser.parse_args()
+
+    docs_dir = Path(os.getenv("DOCS_DIR", "docs"))
+    index_dir = os.getenv("CHROMA_DIR", "chroma_store")
+    if args.rebuild and not any(docs_dir.rglob("*")):
+        raise SystemExit(f"No documents found in {docs_dir.resolve()}.")
+
+    store = ChromaVectorStore(index_dir)
+    if args.rebuild or store.collection.count() == 0:
+        docs = load_all_documents(docs_dir)
+        if not docs:
+            raise SystemExit(f"No supported documents found in {docs_dir.resolve()}.")
+        store.build_from_documents(docs)
+
+    rag = RAGSearch(
+        persist_dir=index_dir,
+        llm_model=os.getenv("GROQ_MODEL", "openai/gpt-oss-120b"),
+        vectorstore=store,
+    )
+    print("Document RAG is ready. Ask a question, or type 'exit' to quit.")
+    while True:
+        try:
+            question = input("\nYou: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            break
+        if question.lower() in {"exit", "quit"}:
+            break
+        if question:
+            try:
+                print(f"\nAnswer: {rag.search_and_summarize(question)}")
+            except Exception as exc:
+                print(f"Could not answer: {exc}")
+
+
+if __name__ == "__main__":
+    main()
+</file>
+
+<file path="README.md">
+# Local document RAG
+
+A local Streamlit app for chatting with your documents and managing the indexed files. Documents are split into 1,000-character chunks with 200 characters of overlap, embedded with `all-MiniLM-L6-v2`, and stored in ChromaDB.
+
+## Quick start
+
+Use Python 3.10 or newer and create a virtual environment:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+Copy `.env.example` to `.env` and set `GROQ_API_KEY`. Then launch the browser UI:
+
+```powershell
+python -m streamlit run ui.py
+```
+
+The server binds to `127.0.0.1`, so the UI is available only from this computer by default.
+
+The app opens with **Chat** and **Documents** tabs. In Documents, upload one or more supported files and select **Upload and index**. The app stores uploaded files under `docs/uploads/`, chunks and embeds them, and adds the vectors to ChromaDB. In Chat, ask questions about the indexed content. Chat history lasts for the current browser session.
+
+Supported file types: PDF, TXT, Markdown, CSV, DOCX, JSON, and JSONL. The embedding model is downloaded from Hugging Face the first time it is needed, so initial setup requires internet access. No Hugging Face token is required.
+
+## Credentials and storage
+
+The Groq API key is required for chat answers and belongs in `.env` as `GROQ_API_KEY`. Chroma indexing does not require the Groq key. The question and retrieved text passages are sent to Groq to generate answers.
+
+By default, ChromaDB uses local persistence in `chroma_store/`. To use Chroma Cloud instead, set `CHROMA_MODE=cloud` and provide `CHROMA_API_KEY`, `CHROMA_TENANT`, and `CHROMA_DATABASE` in `.env`. Restart Streamlit after changing `.env` settings.
+
+Optional `.env` settings:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `GROQ_MODEL` | `openai/gpt-oss-120b` | Groq chat model |
+| `DOCS_DIR` | `docs` | Root folder for uploaded and existing documents |
+| `CHROMA_DIR` | `chroma_store` | Local ChromaDB directory |
+| `CHROMA_MODE` | `local` | Use `cloud` for Chroma Cloud |
+| `EMBEDDING_MODEL` | `all-MiniLM-L6-v2` | Sentence Transformers model |
+| `RETRIEVAL_MAX_DISTANCE` | `0.65` | Maximum Chroma cosine distance accepted as relevant; lower values make the app more cautious about unrelated matches |
+
+Chat uses a relevance cutoff before asking Groq to draft an answer. If no retrieved passage is close enough, or the passages do not contain the answer, the app asks you to upload the related document instead of answering from general model knowledge. The cutoff is a tuning setting: lower it to decline more often, or raise it if relevant questions are being declined.
+
+## Adding and replacing documents
+
+New uploads are added without reprocessing other indexed documents. Uploading a file with the same name replaces that upload's previous chunks. Uploaded files and the Chroma index are ignored by Git.
+
+For a full rebuild from every supported file in `DOCS_DIR`, run:
+
+```powershell
+python app.py --rebuild
+```
+
+This replaces the app's ChromaDB `documents` collection. Keep a backup if you need to preserve an existing index.
+If the Documents tab reports legacy chunks without filenames, rebuild once so ChromaDB can record the current source metadata.
+</file>
+
+<file path="requirements.txt">
+langchain>=0.3,<2
+langchain-community>=0.3,<2
+langchain-text-splitters>=0.3,<2
+langchain-groq>=0.2,<2
+python-dotenv>=1,<2
+pypdf>=5,<7
+docx2txt>=0.8,<1
+sentence-transformers>=3,<6
+chromadb>=1,<2
+streamlit>=1.44,<2
+</file>
+
+<file path="ui.py">
+import os
+import uuid
+from pathlib import Path
+
+import streamlit as st
+from dotenv import load_dotenv
+
+from src.data_loader import SUPPORTED_EXTENSIONS, load_document_file
+from src.search import RAGSearch
+from src.vectorstore import ChromaVectorStore
+
+
+st.set_page_config(page_title="Document RAG", page_icon="📚", layout="wide")
+load_dotenv()
+
+
+@st.cache_resource(show_spinner=False)
+def get_vector_store() -> ChromaVectorStore:
+    return ChromaVectorStore(
+        persist_dir=os.getenv("CHROMA_DIR", "chroma_store"),
+        embedding_model=os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2"),
+    )
+
+
+@st.cache_resource(show_spinner=False)
+def get_rag_search() -> RAGSearch:
+    return RAGSearch(
+        llm_model=os.getenv("GROQ_MODEL", "openai/gpt-oss-120b"),
+        vectorstore=get_vector_store(),
+    )
+
+
+def save_and_index_upload(uploaded_file, store: ChromaVectorStore, docs_dir: Path, progress=None) -> int:
+    # Uploaded names are untrusted. Keep only the basename and save into an app-owned folder.
+    filename = Path(uploaded_file.name.replace("\\", "/")).name
+    suffix = Path(filename).suffix.lower()
+    if suffix not in SUPPORTED_EXTENSIONS:
+        raise ValueError(f"Unsupported file type: {suffix or '(no extension)'}")
+
+    upload_dir = docs_dir / "uploads"
+    staging_dir = docs_dir / ".ui_upload_staging"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    staged_path = staging_dir / f"{uuid.uuid4().hex}{suffix}"
+    target_path = upload_dir / filename
+
+    try:
+        staged_path.write_bytes(uploaded_file.getvalue())
+        documents = load_document_file(staged_path)
+        if not documents:
+            raise ValueError("The file contains no readable text.")
+
+        source_key = f"upload:{filename.casefold()}"
+        chunk_count = store.upsert_file(
+            documents,
+            source_key=source_key,
+            source_label=filename,
+            progress=progress,
+        )
+        staged_path.replace(target_path)
+        return chunk_count
+    finally:
+        staged_path.unlink(missing_ok=True)
+
+
+st.title("Document RAG")
+st.caption("Ask questions about your indexed documents or add more files to the knowledge base.")
+
+with st.spinner("Connecting to ChromaDB and loading the embedding model…"):
+    try:
+        vector_store = get_vector_store()
+    except Exception as exc:
+        st.error(f"Could not initialize ChromaDB or the embedding model: {exc}")
+        st.stop()
+
+chat_tab, documents_tab = st.tabs(["Chat", "Documents"])
+
+with chat_tab:
+    st.subheader("Ask your documents")
+    if "chat_messages" not in st.session_state:
+        st.session_state.chat_messages = []
+
+    chunk_count = vector_store.collection.count()
+    if chunk_count == 0:
+        st.info("Add and index documents in the Documents tab before asking a question.")
+
+    # Declaring chat_input before the transcript keeps the input pinned at the bottom.
+    question = st.chat_input("Ask a question about your documents", disabled=chunk_count == 0)
+    if question:
+        st.session_state.chat_messages.append({"role": "user", "content": question})
+        try:
+            with st.spinner("Searching your documents and generating an answer..."):
+                answer = get_rag_search().search_and_summarize(question)
+        except Exception as exc:
+            answer = f"I couldn't answer that question: {exc}"
+        st.session_state.chat_messages.append({"role": "assistant", "content": answer})
+
+    for message in st.session_state.chat_messages:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+
+with documents_tab:
+    st.subheader("Add documents")
+    st.write("Select one or more supported files, then upload and index them in ChromaDB.")
+    docs_dir = Path(os.getenv("DOCS_DIR", "docs")).expanduser()
+    accepted_types = sorted(extension.lstrip(".") for extension in SUPPORTED_EXTENSIONS)
+
+    with st.form("document_upload_form", clear_on_submit=True):
+        uploads = st.file_uploader(
+            "Documents",
+            type=accepted_types,
+            accept_multiple_files=True,
+            help="PDF, TXT, Markdown, CSV, DOCX, JSON, and JSONL are supported.",
+        )
+        submitted = st.form_submit_button("Upload and index", type="primary")
+
+    if submitted:
+        if not uploads:
+            st.warning("Choose at least one document to upload.")
+        else:
+            for uploaded_file in uploads:
+                progress = st.progress(0, text=f"Processing {Path(uploaded_file.name).name}…")
+                try:
+                    chunks_added = save_and_index_upload(
+                        uploaded_file,
+                        vector_store,
+                        docs_dir,
+                        progress=lambda value: progress.progress(
+                            int(value * 100), text=f"Chunking, embedding, and indexing {Path(uploaded_file.name).name}…"
+                        ),
+                    )
+                    progress.progress(100, text=f"Indexed {Path(uploaded_file.name).name}")
+                    st.success(
+                        f"{Path(uploaded_file.name).name}: indexed {chunks_added} chunks. "
+                        "Uploading this filename again replaces its indexed chunks."
+                    )
+                except Exception as exc:
+                    progress.empty()
+                    st.error(f"Could not index {Path(uploaded_file.name).name}: {exc}")
+
+    try:
+        indexed_chunks, indexed_sources = vector_store.index_summary()
+        st.metric("Indexed chunks", indexed_chunks)
+        st.markdown("**Indexed documents**")
+        if indexed_sources:
+            for source in indexed_sources:
+                st.write(f"- {source}")
+            if "Legacy chunks (source metadata unavailable)" in indexed_sources:
+                st.warning(
+                    "Some existing chunks have no stored filename metadata. Run "
+                    "`python app.py --rebuild` once to rebuild them from the files in DOCS_DIR."
+                )
+        else:
+            st.caption("No documents are indexed yet.")
+    except Exception as exc:
+        st.error(f"Could not read the ChromaDB index: {exc}")
+</file>
+
+</files>

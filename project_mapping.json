@@ -1,0 +1,59 @@
+{
+  "WAM": [
+    "WAM - User Manual.pdf",
+    "Warehouse_Documentation.docx"
+  ],
+  "Merchandising": [
+    "Merchandising Portal Updated User Guide.docx",
+    "Merchandising Portal FAQ.pdf"
+  ],
+  "SalesVisitReport": [
+    "Sales  Visit User Manual.docx"
+  ],
+  "Pick pack": [
+    "Pick Pack.pdf",
+    "PickPack_TechDoc.docx"
+  ],
+  "SQLPulse": [
+    "SQLPulse.md"
+  ],
+  "ADP Payroll": [
+    "User Manual - SP Commission - New UIUX.docx"
+  ],
+  "ARApproval": [
+    "ARApproval documentation.docx",
+    "FAQ AR Approval.docx",
+    "AR Approval - FAQ Page.docx",
+    "AR Approval - Issue Log.docx",
+    "AR Approval Freight (Claim) Request - Flowchart (1).pdf",
+    "AR Approval Refund Request - Flowchart (1).pdf",
+    "New Help File - ARApproval.docx"
+  ],
+  "Cycle Count": [
+    "Cycle Count User Manual for Ops Team.pdf",
+    "Cycle Count User Manual.pdf",
+    "CycleCountiOS_User Manual.pdf",
+    "Cycle Count iOS app Documentation v2.docx",
+    "Cycle Count iOS app Documentation.docx",
+    "Cycle Count iOS Doc with Validation.docx",
+    "api-documentation.md",
+    "api-documentation.pdf",
+    "Cycle Count Sample.docx"
+  ],
+  "SO Quality Check Dashboard": [
+    "SOQC Report Documention.docx"
+  ],
+  "Vendor Maintenance": [
+    "VendorMaintenance_User Manual.pdf"
+  ],
+  "WMS Calendar": [
+    "WMS Calendar BRD_01202026.docx"
+  ],
+  "CC Receipt": [
+    "CC Receipt v1.2.4 - User Manual.docx",
+    "CC Receipt v1.2.4 - User Manual.pdf"
+  ],
+  "WMS IOS": [
+    "User Manual_LoadingShippingiOS_Revised.pdf"
+  ]
+}

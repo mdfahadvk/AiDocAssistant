@@ -1,0 +1,18 @@
+{
+  "projects": [
+    "WAM",
+    "Vendor Maintenance",
+    "SQLPulse"
+  ],
+  "applications": [
+    "NSWeb",
+    "NS_APP"
+  ],
+  "databases": [],
+  "pages": [
+    "History Log"
+  ],
+  "apis": [],
+  "stored_procedures": [],
+  "technologies": []
+}

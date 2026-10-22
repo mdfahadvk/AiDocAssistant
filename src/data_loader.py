@@ -1,103 +1,198 @@
+import json
+import logging
 from pathlib import Path
-from typing import List, Any
-from langchain_community.document_loaders import PyPDFLoader, TextLoader, CSVLoader
-from langchain_community.document_loaders import Docx2txtLoader
-from langchain_community.document_loaders.excel import UnstructuredExcelLoader
-from langchain_community.document_loaders import JSONLoader
+from typing import Any
 
-def load_all_documents(data_dir: str) -> List[Any]:
-    """
-    Load all supported files from the data directory and convert to LangChain document structure.
-    Supported: PDF, TXT, CSV, Excel, Word, JSON
-    """
-    # Use project root data folder
-    data_path = Path(data_dir).resolve()
-    print(f"[DEBUG] Data path: {data_path}")
-    documents = []
+from langchain_core.documents import Document
 
-    # PDF files
-    pdf_files = list(data_path.glob('**/*.pdf'))
-    print(f"[DEBUG] Found {len(pdf_files)} PDF files: {[str(f) for f in pdf_files]}")
-    for pdf_file in pdf_files:
-        print(f"[DEBUG] Loading PDF: {pdf_file}")
-        try:
-            loader = PyPDFLoader(str(pdf_file))
-            loaded = loader.load()
-            print(f"[DEBUG] Loaded {len(loaded)} PDF docs from {pdf_file}")
-            documents.extend(loaded)
-        except Exception as e:
-            print(f"[ERROR] Failed to load PDF {pdf_file}: {e}")
+logger = logging.getLogger(__name__)
 
-    # TXT files
-    txt_files = list(data_path.glob('**/*.txt'))
-    print(f"[DEBUG] Found {len(txt_files)} TXT files: {[str(f) for f in txt_files]}")
-    for txt_file in txt_files:
-        print(f"[DEBUG] Loading TXT: {txt_file}")
-        try:
-            loader = TextLoader(str(txt_file))
-            loaded = loader.load()
-            print(f"[DEBUG] Loaded {len(loaded)} TXT docs from {txt_file}")
-            documents.extend(loaded)
-        except Exception as e:
-            print(f"[ERROR] Failed to load TXT {txt_file}: {e}")
 
-    # CSV files
-    csv_files = list(data_path.glob('**/*.csv'))
-    print(f"[DEBUG] Found {len(csv_files)} CSV files: {[str(f) for f in csv_files]}")
-    for csv_file in csv_files:
-        print(f"[DEBUG] Loading CSV: {csv_file}")
-        try:
-            loader = CSVLoader(str(csv_file))
-            loaded = loader.load()
-            print(f"[DEBUG] Loaded {len(loaded)} CSV docs from {csv_file}")
-            documents.extend(loaded)
-        except Exception as e:
-            print(f"[ERROR] Failed to load CSV {csv_file}: {e}")
+LOADERS: dict[str, Any] = {
+    ".pdf": None,
+    ".docx": None,
+    ".txt": None,
+    ".md": None,
+    ".csv": None,
+}
+SUPPORTED_EXTENSIONS = frozenset((*LOADERS, ".json", ".jsonl"))
 
-    # Excel files
-    xlsx_files = list(data_path.glob('**/*.xlsx'))
-    print(f"[DEBUG] Found {len(xlsx_files)} Excel files: {[str(f) for f in xlsx_files]}")
-    for xlsx_file in xlsx_files:
-        print(f"[DEBUG] Loading Excel: {xlsx_file}")
-        try:
-            loader = UnstructuredExcelLoader(str(xlsx_file))
-            loaded = loader.load()
-            print(f"[DEBUG] Loaded {len(loaded)} Excel docs from {xlsx_file}")
-            documents.extend(loaded)
-        except Exception as e:
-            print(f"[ERROR] Failed to load Excel {xlsx_file}: {e}")
 
-    # Word files
-    docx_files = list(data_path.glob('**/*.docx'))
-    print(f"[DEBUG] Found {len(docx_files)} Word files: {[str(f) for f in docx_files]}")
-    for docx_file in docx_files:
-        print(f"[DEBUG] Loading Word: {docx_file}")
-        try:
-            loader = Docx2txtLoader(str(docx_file))
-            loaded = loader.load()
-            print(f"[DEBUG] Loaded {len(loaded)} Word docs from {docx_file}")
-            documents.extend(loaded)
-        except Exception as e:
-            print(f"[ERROR] Failed to load Word {docx_file}: {e}")
+def calculate_file_hash(path: str | Path) -> str:
+    """Return a stable SHA-256 hash without loading the whole file in memory."""
+    import hashlib
 
-    # JSON files
-    json_files = list(data_path.glob('**/*.json'))
-    print(f"[DEBUG] Found {len(json_files)} JSON files: {[str(f) for f in json_files]}")
-    for json_file in json_files:
-        print(f"[DEBUG] Loading JSON: {json_file}")
-        try:
-            loader = JSONLoader(str(json_file))
-            loaded = loader.load()
-            print(f"[DEBUG] Loaded {len(loaded)} JSON docs from {json_file}")
-            documents.extend(loaded)
-        except Exception as e:
-            print(f"[ERROR] Failed to load JSON {json_file}: {e}")
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
 
-    print(f"[DEBUG] Total loaded documents: {len(documents)}")
+
+def _load_pdf(path: Path) -> list[Document]:
+    """Extract PDF text, tables, and OCR text for image-only pages."""
+    import pymupdf
+
+    documents: list[Document] = []
+    with pymupdf.open(path) as pdf:
+        for page_number, page in enumerate(pdf):
+            text = page.get_text("text").strip()
+            ocr_used = False
+            if len(text) < 50:
+                try:
+                    text_page = page.get_textpage_ocr(language="eng", dpi=200, full=True)
+                    text = page.get_text("text", textpage=text_page).strip()
+                    ocr_used = bool(text)
+                except Exception as exc:
+                    logger.warning("OCR failed for %s page %s: %s", path.name, page_number + 1, exc)
+
+            table_text: list[str] = []
+            try:
+                tables = page.find_tables()
+                for table_number, table in enumerate(tables.tables, start=1):
+                    rows = table.extract()
+                    if rows:
+                        table_text.append(
+                            "Table %s\n%s" % (
+                                table_number,
+                                "\n".join(
+                                    "| " + " | ".join(str(cell or "").strip() for cell in row) + " |"
+                                    for row in rows
+                                ),
+                            )
+                        )
+            except Exception as exc:
+                logger.warning("Table extraction failed for %s page %s: %s", path.name, page_number + 1, exc)
+
+            combined = "\n\n".join(part for part in [text, *table_text] if part).strip()
+            if combined:
+                documents.append(
+                    Document(
+                        page_content=combined,
+                        metadata={
+                            "source": str(path),
+                            "page": page_number,
+                            "ocr": ocr_used,
+                            "content_type": "pdf_page",
+                        },
+                    )
+                )
     return documents
 
-# Example usage
-if __name__ == "__main__":
-    docs = load_all_documents("data")
-    print(f"Loaded {len(docs)} documents.")
-    print("Example document:", docs[0] if docs else None)
+
+def _iter_docx_blocks(document: Any):
+    """Yield DOCX paragraphs and tables in their original order."""
+    from docx.document import Document as DocumentObject
+    from docx.table import Table, _Cell
+    from docx.text.paragraph import Paragraph
+    from docx.oxml.text.paragraph import CT_P
+    from docx.oxml.table import CT_Tbl
+
+    parent = document.element.body if isinstance(document, DocumentObject) else document._tc
+    for child in parent.iterchildren():
+        if isinstance(child, CT_P):
+            yield Paragraph(child, parent)
+        elif isinstance(child, CT_Tbl):
+            yield Table(child, parent)
+
+
+def _load_docx(path: Path) -> list[Document]:
+    from docx import Document as WordDocument
+
+    word_document = WordDocument(path)
+    results: list[Document] = []
+    heading = "Document"
+    for block in _iter_docx_blocks(word_document):
+        if hasattr(block, "text"):
+            text = block.text.strip()
+            if not text:
+                continue
+            style = str(getattr(getattr(block, "style", None), "name", ""))
+            if style.casefold().startswith("heading"):
+                heading = text
+                continue
+            results.append(
+                Document(
+                    page_content=f"{heading}\n\n{text}",
+                    metadata={"source": str(path), "section": heading, "content_type": "paragraph"},
+                )
+            )
+        else:
+            rows = [
+                "| " + " | ".join(cell.text.replace("\n", " ").strip() for cell in row.cells) + " |"
+                for row in block.rows
+            ]
+            if rows:
+                results.append(
+                    Document(
+                        page_content=f"{heading}\n\nTable\n" + "\n".join(rows),
+                        metadata={"source": str(path), "section": heading, "content_type": "table"},
+                    )
+                )
+    return results
+
+
+def load_document_file(file_path: str | Path) -> list[Document]:
+    """Load one supported document file into LangChain documents."""
+    path = Path(file_path).expanduser().resolve()
+    suffix = path.suffix.lower()
+    if suffix not in SUPPORTED_EXTENSIONS:
+        raise ValueError(f"Unsupported file type: {suffix or '(no extension)'}")
+
+    if suffix == ".pdf":
+        return _load_pdf(path)
+    if suffix == ".docx":
+        return _load_docx(path)
+    if suffix in LOADERS:
+        text = path.read_text(encoding="utf-8")
+        return [Document(page_content=text, metadata={"source": str(path)})]
+    if suffix == ".json":
+        value = json.loads(path.read_text(encoding="utf-8"))
+        text = json.dumps(value, ensure_ascii=False, indent=2)
+        return [Document(page_content=text, metadata={"source": str(path)})]
+
+    documents = []
+    failures = []
+    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError as exc:
+            failures.append(f"{path.name}, line {line_number}: {exc.msg}")
+            continue
+        documents.append(
+            Document(
+                page_content=json.dumps(value, ensure_ascii=False),
+                metadata={"source": str(path), "line": line_number},
+            )
+        )
+    for failure in failures:
+        logger.warning("Skipped malformed JSONL: %s", failure)
+    return documents
+
+
+def load_all_documents(data_dir: str | Path) -> list[Document]:
+    """Load supported documents recursively, reporting all parse failures."""
+    data_path = Path(data_dir).expanduser().resolve()
+    if not data_path.is_dir():
+        raise FileNotFoundError(
+            f"Document directory not found: {data_path}. Create it and add documents."
+        )
+
+    documents: list[Document] = []
+    failures: list[str] = []
+    for path in sorted(
+        file_path
+        for file_path in data_path.rglob("*")
+        if file_path.is_file() and file_path.suffix.lower() in SUPPORTED_EXTENSIONS
+    ):
+        try:
+            documents.extend(load_document_file(path))
+        except Exception as exc:
+            failures.append(f"{path}: {exc}")
+
+    if failures:
+        details = "\n".join(f"- {failure}" for failure in failures)
+        raise RuntimeError(f"Could not load one or more documents:\n{details}")
+    return documents
