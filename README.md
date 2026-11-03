@@ -1,3 +1,4 @@
+<img width="1774" height="887" alt="AI Assistant RAG Application Flow" src="https://github.com/user-attachments/assets/4fd757ad-012f-4844-84ce-85d73334ed95" />
 # MSI AI Assistant
 
 A local Streamlit app for chatting with your documents and managing the indexed files. Documents are split into 1,000-character chunks with 200 characters of overlap, embedded with `all-MiniLM-L6-v2`, and stored in ChromaDB.
